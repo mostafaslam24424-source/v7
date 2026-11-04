@@ -1,6 +1,7 @@
 import unittest
 
-from backtest_v7 import BAR_MS, aggregate_completed_klines
+from backtest_v7 import BAR_MS, aggregate_completed_klines, simulate
+from backtest_horizons_v7 import HORIZON_MINUTES
 
 
 class UtcTimeframeAggregationTests(unittest.TestCase):
@@ -35,6 +36,21 @@ class UtcTimeframeAggregationTests(unittest.TestCase):
             del values[12]
         rows = aggregate_completed_klines(*data, 46, 240)
         self.assertEqual(rows, [])
+
+
+    def test_primary_backtest_timeout_matches_each_opportunity_profile(self):
+        expected = {"SCALP": 12, "INTRADAY": 288, "SWING": 2016}
+        for kind, bars in expected.items():
+            with self.subTest(kind=kind):
+                horizon = HORIZON_MINUTES[kind] // 5
+                self.assertEqual(horizon, bars)
+                prices = [100.0] * bars
+                outcome, observed, exit_price = simulate(
+                    prices, prices, prices, prices, 0, 50.0, 50.0, horizon
+                )
+                self.assertEqual(outcome, "TIMEOUT")
+                self.assertEqual(observed, bars)
+                self.assertEqual(exit_price, 100.0)
 
     def test_daily_candle_requires_all_288_five_minute_bars(self):
         data = self.make_bars(288 + 1)
