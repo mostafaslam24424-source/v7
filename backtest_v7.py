@@ -44,6 +44,8 @@ import zipfile
 import zlib
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+from backtest_horizons_v7 import HORIZON_MINUTES
+
 import numpy as np
 import pandas as pd
 
@@ -305,7 +307,7 @@ def process_symbol(sym):
         return sym, [], [], [], 0
     t, o, h, l, c, qv = A[:, 0], A[:, 1], A[:, 2], A[:, 3], A[:, 4], A[:, 5]
     n = len(t)
-    max_bars = int(SC["TRADE_TIMEOUT_MIN"] // 5)
+    max_bars = max(HORIZON_MINUTES.values()) // 5  # reserve enough future bars for the longest profile
     cost = 2.0 * (cfg["fee"] + cfg["slip"])
     delays = cfg["delays"]
     prim = cfg["delay"]
@@ -457,9 +459,10 @@ def process_symbol(sym):
         for key, value in horizon_result.items():
             if key not in ("opportunity_type", "horizon_minutes"):
                 rec[f"profile_{key}"] = value
+        profile_timeout_bars = HORIZON_MINUTES.get(profile["type"], HORIZON_MINUTES["INTRADAY"]) // 5
         for d in delays:
             e = i + d
-            outcome, bars, ex = simulate(ol, hl, ll, cl, e, sl_pct, tp_pct, max_bars)
+            outcome, bars, ex = simulate(ol, hl, ll, cl, e, sl_pct, tp_pct, profile_timeout_bars)
             gross, net, r = net_return(ol[e], ex, sl_pct, cost)
             rec[f"outcome_d{d}"] = outcome
             rec[f"bars_d{d}"] = bars
@@ -468,7 +471,7 @@ def process_symbol(sym):
             rec[f"r_d{d}"] = round(r, 4)
         trades.append(rec)
         cand = None
-        block_until = i + DAY_BARS          # active_tracks keeps the symbol blocked ~24h
+        block_until = i + max(DAY_BARS, profile_timeout_bars)  # active track + 24h final cooldown
 
     # Random-entry baseline: same coin, same month, same SL/TP distances as each signal.
     rng = np.random.default_rng(zlib.crc32(sym.encode()) & 0xFFFFFFFF)
@@ -480,7 +483,10 @@ def process_symbol(sym):
             continue
         for bi in rng.choice(pool, size=min(cfg["baseline_k"], len(pool)), replace=False):
             e = int(bi) + prim
-            outcome, bars, ex = simulate(ol, hl, ll, cl, e, tr["sl_pct"], tr["tp1_pct"], max_bars)
+            outcome, bars, ex = simulate(
+                ol, hl, ll, cl, e, tr["sl_pct"], tr["tp1_pct"],
+                HORIZON_MINUTES.get(tr["opportunity_type"], HORIZON_MINUTES["INTRADAY"]) // 5,
+            )
             gross, net, r = net_return(ol[e], ex, tr["sl_pct"], cost)
             base.append({"symbol": sym, "month": tr["month"], "signal_ts": int(t[int(bi)]),
                          "outcome": outcome, "net": net, "r": r,
