@@ -223,6 +223,53 @@ def net_return(entry, exit_price, sl_pct, cost_pct):
     return gross, net, net / sl_pct
 
 
+def aggregate_completed_klines(timestamps, opens, highs, lows, closes, quote_volumes,
+                               upto_index, interval_minutes):
+    """Build UTC-aligned Binance-style candles using only fully closed 5m bars.
+
+    Incomplete buckets and buckets containing missing 5m bars are discarded.
+    upto_index is inclusive; the cutoff is the close time of that 5m bar.
+    """
+    interval_ms = int(interval_minutes) * 60_000
+    expected = interval_ms // BAR_MS
+    if expected < 1 or interval_ms % BAR_MS:
+        raise ValueError("interval_minutes must be a positive multiple of five")
+    cutoff_ms = int(timestamps[upto_index]) + BAR_MS
+    buckets = {}
+    for j in range(int(upto_index) + 1):
+        ts = int(timestamps[j])
+        bucket = (ts // interval_ms) * interval_ms
+        if bucket + interval_ms > cutoff_ms:
+            continue
+        row = buckets.setdefault(bucket, {
+            "times": [], "open": float(opens[j]), "high": float(highs[j]),
+            "low": float(lows[j]), "close": float(closes[j]),
+            "quote_volume": 0.0,
+        })
+        row["times"].append(ts)
+        row["high"] = max(row["high"], float(highs[j]))
+        row["low"] = min(row["low"], float(lows[j]))
+        row["close"] = float(closes[j])
+        row["quote_volume"] += float(quote_volumes[j])
+
+    result = []
+    for bucket in sorted(buckets):
+        row = buckets[bucket]
+        times = row["times"]
+        # Require every expected 5m constituent bar; never turn a data gap into a candle.
+        if len(times) != expected:
+            continue
+        if times[0] != bucket or times[-1] != bucket + interval_ms - BAR_MS:
+            continue
+        if any(times[n] - times[n - 1] != BAR_MS for n in range(1, len(times))):
+            continue
+        result.append([
+            bucket, row["open"], row["high"], row["low"], row["close"],
+            0.0, bucket + interval_ms - 1, row["quote_volume"], 0, 0.0, 0.0,
+        ])
+    return result
+
+
 # ----------------------------------------------------------------------------------------
 # Worker
 # ----------------------------------------------------------------------------------------
@@ -379,11 +426,13 @@ def process_symbol(sym):
         # end at the signal's last closed 5m candle (k=i-1), never use future bars.
         from trade_profile_v7 import classify_opportunity
         k = i - 1
-        closes_4h = [float(c[j]) for j in range(0, k + 1, 48)]
-        closes_1d = [float(c[j]) for j in range(0, k + 1, 288)]
-        rows_4h = [[0, 0, 0, 0, v] for v in closes_4h]
-        rows_1d = [[0, 0, 0, 0, v] for v in closes_1d]
-        profile = classify_opportunity(x, rows_4h, rows_1d)
+        # Aggregate real UTC-aligned 4h/1d candles from 5m OHLCV.
+        # Only buckets fully closed by the signal timestamp are eligible.
+        rows_4h = aggregate_completed_klines(t, o, h, l, c, qv, k, 4 * 60)
+        rows_1d = aggregate_completed_klines(t, o, h, l, c, qv, k, 24 * 60)
+        profile = classify_opportunity(
+            x, rows_4h, rows_1d, last_row_is_forming=False
+        )
         rec["opportunity_type"] = profile["type"]
         rec["opportunity_basis"] = profile["basis"]
         rec["tp2_pct"] = round((sl_pct * max(2.0, risk["tp1_rr"] + 0.5)), 4)

@@ -14,12 +14,15 @@ def _number(data: dict, key: str, default: float = 0.0) -> float:
         return default
 
 
-def _completed_closes(rows):
-    """Return closes of completed Binance candles (exclude the last, forming bar)."""
-    if not isinstance(rows, list) or len(rows) < 5:
+def _completed_closes(rows, last_row_is_forming=True):
+    """Return completed closes; live Binance responses include one forming last row."""
+    if not isinstance(rows, list):
+        return []
+    source = rows[:-1] if last_row_is_forming else rows
+    if len(source) < 4:
         return []
     closes = []
-    for row in rows[:-1]:
+    for row in source:
         try:
             close = float(row[4])
             if close > 0:
@@ -35,7 +38,8 @@ def _trend_pct(closes, lookback: int = 3):
     return (closes[-1] / closes[-lookback - 1] - 1.0) * 100.0
 
 
-def classify_opportunity(candidate: dict, klines_4h=None, klines_1d=None) -> dict:
+def classify_opportunity(candidate: dict, klines_4h=None, klines_1d=None,
+                         last_row_is_forming=True) -> dict:
     """Classify a pump candidate as scalp, intraday, or swing when HTF agrees.
 
     Swing is only assigned when completed 4h and daily candles both confirm.
@@ -49,8 +53,8 @@ def classify_opportunity(candidate: dict, klines_4h=None, klines_1d=None) -> dic
     vol15 = _number(candidate, "volume_15m")
     continuity = _number(candidate, "trend_continuity")
 
-    closes_4h = _completed_closes(klines_4h)
-    closes_1d = _completed_closes(klines_1d)
+    closes_4h = _completed_closes(klines_4h, last_row_is_forming)
+    closes_1d = _completed_closes(klines_1d, last_row_is_forming)
     trend_4h = _trend_pct(closes_4h, 3)
     trend_1d = _trend_pct(closes_1d, 3)
 

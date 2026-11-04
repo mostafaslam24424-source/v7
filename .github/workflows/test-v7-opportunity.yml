@@ -10,13 +10,15 @@ on:
       - "test_trade_profile_v7.py"
       - "backtest_horizons_v7.py"
       - "test_backtest_horizons_v7.py"
+      - "test_backtest_timeframes_v7.py"
       - ".github/workflows/test-v7-opportunity.yml"
   push:
-    branches: ["feat/v7-opportunity-types-paper-plan"]
+    branches: ["fix/v7-utc-timeframes-arabic-alerts"]
     paths:
       - "binance_early_pump_v7.py"
       - "trade_profile_v7.py"
       - "test_trade_profile_v7.py"
+      - "test_backtest_timeframes_v7.py"
       - ".github/workflows/test-v7-opportunity.yml"
 
 jobs:
@@ -32,4 +34,4 @@ jobs:
       - name: Compile scanner and backtest modules
         run: python -m py_compile binance_early_pump_v7.py backtest_v7.py trade_profile_v7.py backtest_horizons_v7.py
       - name: Run paper-analysis unit tests
-        run: python -m unittest -v test_trade_profile_v7.py test_backtest_horizons_v7.py
+        run: python -m unittest -v test_trade_profile_v7.py test_backtest_horizons_v7.py test_backtest_timeframes_v7.py
