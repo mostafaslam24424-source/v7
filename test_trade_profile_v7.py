@@ -68,6 +68,12 @@ class OpportunityClassificationTests(unittest.TestCase):
         self.assertIsNone(track["tp2_hit_min"])
         self.assertIsNone(track["tp3_hit_min"])
 
+    def test_target_touch_ignores_missing_target_price(self):
+        track = {"tp1": None, "tp2": 102.0, "tp1_hit_min": None, "tp2_hit_min": None}
+        record_target_touches(track, 103.0, 4.0)
+        self.assertIsNone(track["tp1_hit_min"])
+        self.assertEqual(track["tp2_hit_min"], 4.0)
+
 
 if __name__ == "__main__":
     unittest.main()
