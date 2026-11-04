@@ -2182,11 +2182,10 @@ def update_tracking(tickers):
 
         price = tickers.get(symbol, {}).get("price")
         if price is None or price <= 0:
+            # لا نخترع سعر خروج عند غياب بيانات السوق؛ نسجل فجوة بيانات بوضوح.
             notify_outcome(track)
-            if elapsed_min > MAX_AGE_MIN:
-                if track.get("outcome") is None:
-                    track["outcome"], track["exit_pct"] = "TIMEOUT", track.get("mae_pct", 0.0)
-                track["status"] = "COMPLETED"
+            if elapsed_min >= horizon_timeout:
+                track["status"] = "COMPLETED_DATA_GAP"
                 safe_save_track(track)
                 del active_tracks[symbol]
             elif changed:
