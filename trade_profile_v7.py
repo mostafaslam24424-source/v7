@@ -86,3 +86,13 @@ def classify_opportunity(candidate: dict, klines_4h=None, klines_1d=None) -> dic
         "holding_window": "تُراجع خلال اليوم — تقدير مبدئي",
         "basis": "لا توجد بيانات إطار أعلى كافية لتصنيفها كفرصة متعددة الأيام",
     }
+
+
+def holding_timeout_minutes(opportunity_type: str) -> int:
+    """Maximum paper-observation window for each displayed opportunity horizon."""
+    kind = str(opportunity_type or "INTRADAY").upper()
+    if kind == "SCALP":
+        return 60
+    if kind == "SWING":
+        return 7 * 24 * 60
+    return 24 * 60
