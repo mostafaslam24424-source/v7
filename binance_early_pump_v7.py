@@ -27,6 +27,7 @@ import pandas as pd
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from entry_quality_v7 import confirm_one_minute_entry
+from trade_profile_v7 import classify_opportunity
 
 # ---------- Logging ----------
 logging.basicConfig(
@@ -159,6 +160,7 @@ RISK_MAX_SL_PCT = 12.0
 RISK_ATR_MULT_SL = 1.5
 RISK_RR_TP1 = 1.5
 RISK_RR_TP2 = 3.0
+RISK_RR_TP3 = 4.5
 RISK_HIGH_ATR_THRESHOLD = 6.0
 RISK_HIGH_ATR_TP1_RR = 1.2
 RISK_HIGH_RSI_THRESHOLD = 76.0
@@ -776,11 +778,13 @@ def compute_risk_levels(entry, atr_val, rsi_val, liquidity):
         notes.append("سيولة منخفضة → TP1 أقرب")
 
     tp2_rr = max(RISK_RR_TP2, tp1_rr + 0.5)
+    tp3_rr = max(RISK_RR_TP3, tp2_rr + 0.5)
 
     sl_price = entry * (1 - sl_pct / 100.0)
     risk_per_unit = entry - sl_price
     tp1_price = entry + risk_per_unit * tp1_rr
     tp2_price = entry + risk_per_unit * tp2_rr
+    tp3_price = entry + risk_per_unit * tp3_rr
 
     return {
         "entry": entry,
@@ -792,6 +796,9 @@ def compute_risk_levels(entry, atr_val, rsi_val, liquidity):
         "tp2": tp2_price,
         "tp2_pct": pct(tp2_price, entry),
         "tp2_rr": tp2_rr,
+        "tp3": tp3_price,
+        "tp3_pct": pct(tp3_price, entry),
+        "tp3_rr": tp3_rr,
         "atr_used": atr_use,
         "notes": notes,
     }
@@ -1790,6 +1797,7 @@ Entry:      {r['entry']:.10g}
 Stop Loss:  {r['sl']:.10g}  ({-r['sl_pct']:+.2f}%)
 TP1:        {r['tp1']:.10g}  ({r['tp1_pct']:+.2f}%)  R/R={r['tp1_rr']:.2f}
 TP2:        {r['tp2']:.10g}  ({r['tp2_pct']:+.2f}%)  R/R={r['tp2_rr']:.2f}
+TP3:        {r['tp3']:.10g}  ({r['tp3_pct']:+.2f}%)  R/R={r['tp3_rr']:.2f}
 ATR14 used: {r['atr_used']:.2f}%
 تعديلات:
 {notes_txt}
@@ -1814,7 +1822,12 @@ ATR14 used: {r['atr_used']:.2f}%
 
     return f"""{PROGRAM_TAG} 🔥 FINAL EARLY-PUMP CANDIDATE
 
-⚠️ إشارة تحليلية — ليست ضمانًا ولا أمر شراء.
+⚠️ إشارة تجريبية للتحليل والمحاكاة فقط — ليست ضمانًا أو أمر تنفيذ.
+
+نوع الفرصة: {x.get('opportunity_label', 'غير محدد')}
+المدة التقديرية: {x.get('holding_window', 'غير محددة')}
+الأساس: {x.get('opportunity_basis', 'لا توجد بيانات كافية')}
+الاتجاه: BUY (الماسح الحالي مخصص لاكتشاف فرص الصعود فقط)
 
 COIN: {x['symbol']}
 SETUP: {x['setup']}
@@ -1853,7 +1866,7 @@ Confirmation scans: {confirmations}
 حجم غير طبيعي + استمرار حجم + حركة سعر متواصلة + اتجاه/ضغط شراء
 + فلتر ضد الـexhaustion وضد الـwash trading.
 
-🚫 لا يوجد Target ثابت. سيتم قياس MFE/MAE فعليًا بعد الإشارة.
+📊 الأهداف ووقف الخسارة مستويات اختبارية محسوبة آليًا وليست ضمانًا.
 📊 تتبع النتيجة: 5m / 15m / 30m / 1h / 4h / 24h
 """
 
@@ -1925,7 +1938,8 @@ def maybe_cleanup_logs(force=False):
 
 TRACK_COLUMNS = [
     "final_time_utc", "symbol", "setup", "score",
-    "entry_price", "sl", "sl_pct", "tp1", "tp1_pct", "tp2", "tp2_pct",
+    "entry_price", "sl", "sl_pct", "tp1", "tp1_pct", "tp2", "tp2_pct", "tp3", "tp3_pct",
+    "opportunity_type", "opportunity_label",
     "atr_used", "quote_volume", "liquidity",
     "gain_5m_at_alert", "gain_15m_at_alert",
     "gain_1h_at_alert", "gain_24h_at_alert",
@@ -1938,7 +1952,7 @@ TRACK_COLUMNS = [
 # أعمدة نصية لازم تقرا object — لو فاضية بانداس بيحوّلها float64
 # وبيرفض الكتابة النصية فيها (Invalid value 'SL' for dtype 'float64')
 TRACK_STR_COLUMNS = ("final_time_utc", "symbol", "setup", "liquidity",
-                     "status", "lane", "outcome")
+                     "status", "lane", "outcome", "opportunity_type", "opportunity_label")
 
 
 def read_track_file():
@@ -2021,6 +2035,10 @@ def save_track(track):
         "tp1_pct": track.get("tp1_pct"),
         "tp2": track.get("tp2"),
         "tp2_pct": track.get("tp2_pct"),
+        "tp3": track.get("tp3"),
+        "tp3_pct": track.get("tp3_pct"),
+        "opportunity_type": track.get("opportunity_type"),
+        "opportunity_label": track.get("opportunity_label"),
         "atr_used": track.get("atr_used"),
         "quote_volume": track["quote_volume"],
         "liquidity": track["liquidity"],
@@ -2232,6 +2250,10 @@ def start_final_tracking(x):
         "tp1_pct": r.get("tp1_pct"),
         "tp2": r.get("tp2"),
         "tp2_pct": r.get("tp2_pct"),
+        "tp3": r.get("tp3"),
+        "tp3_pct": r.get("tp3_pct"),
+        "opportunity_type": x.get("opportunity_type"),
+        "opportunity_label": x.get("opportunity_label"),
         "atr_used": r.get("atr_used"),
         "quote_volume": x["quote_volume"],
         "liquidity": x["liquidity"],
@@ -2323,6 +2345,25 @@ def maybe_final_signal(x, now):
         final_x["price"] = live
         final_x["risk"] = compute_risk_levels(live, final_x.get("atr_pct"),
                                               final_x.get("rsi14"), final_x["liquidity"])
+
+    # Classify the expected holding horizon using completed higher-timeframe candles.
+    # Missing HTF data never upgrades a candidate to Swing.
+    try:
+        htf_4h = get_json("/api/v3/klines", {"symbol": sym, "interval": "4h", "limit": 6}, retries=2)
+    except Exception as exc:
+        htf_4h = None
+        log.warning(f"[OpportunityType] {sym}: 4h data unavailable: {exc}")
+    try:
+        htf_1d = get_json("/api/v3/klines", {"symbol": sym, "interval": "1d", "limit": 6}, retries=2)
+    except Exception as exc:
+        htf_1d = None
+        log.warning(f"[OpportunityType] {sym}: 1d data unavailable: {exc}")
+    horizon = classify_opportunity(final_x, htf_4h, htf_1d)
+    final_x["opportunity_type"] = horizon["type"]
+    final_x["opportunity_label"] = horizon["label"]
+    final_x["holding_window"] = horizon["holding_window"]
+    final_x["opportunity_basis"] = horizon["basis"]
+    log.info(f"[OpportunityType] {sym}: {horizon['label']} | {horizon['basis']}")
 
     cross_label, cross_detail = cross_exchange_confirmation(sym)
 
