@@ -2097,6 +2097,16 @@ def _first_minute_after(ts_sec):
     return (int(ts_sec // 60) + 1) * 60 * 1000
 
 
+def trade_timeout_minutes(track):
+    """Maximum paper-tracking horizon, aligned with the Telegram opportunity label."""
+    kind = str(track.get("opportunity_type", "INTRADAY")).upper()
+    if kind == "SCALP":
+        return 60
+    if kind == "SWING":
+        return 7 * 24 * 60
+    return 24 * 60
+
+
 def walk_track_path(symbol, track, now_ms):
     """
     يمشي على شموع 1m من لحظة الإشارة ويحدد مين اتحقق الأول: SL ولا TP1 (أو TIMEOUT).
@@ -2122,12 +2132,13 @@ def walk_track_path(symbol, track, now_ms):
             track["peak_price"] = max(track["peak_price"], hi)
             track["lowest_price"] = min(track["lowest_price"], lo)
             minutes_in = (open_t - t0_ms) / 60000.0
+            timeout_min = trade_timeout_minutes(track)
             if track.get("outcome") is None and sl and tp1:
                 if lo <= sl:
                     track["outcome"], track["exit_pct"] = "SL", pct(sl, entry)
                 elif hi >= tp1:
                     track["outcome"], track["exit_pct"] = "TP1", pct(tp1, entry)
-                elif minutes_in >= TRADE_TIMEOUT_MIN:
+                elif minutes_in >= timeout_min:
                     track["outcome"], track["exit_pct"] = "TIMEOUT", pct(cl, entry)
                 if track.get("outcome") is not None:
                     track["outcome_min"] = round(minutes_in + 1, 1)
@@ -2155,9 +2166,9 @@ def notify_outcome(track):
 def update_tracking(tickers):
     now = time.time()
     now_ms = int(now * 1000)
-    MAX_AGE_MIN = 1500
     for symbol, track in list(active_tracks.items()):
         elapsed_min = (now - track["start_ts"]) / 60
+        horizon_timeout = trade_timeout_minutes(track)
         entry = track["entry_price"]
         changed = False
 
@@ -2192,8 +2203,8 @@ def update_tracking(tickers):
                 track["results"][target] = pct(price, entry)
                 changed = True
 
-        if elapsed_min >= TRADE_TIMEOUT_MIN + 10 and track.get("outcome") is None:
-            # ماقدرناش نجيب الشموع (خطأ شبكة) -> نقفل بالسعر الحالي
+        if elapsed_min >= horizon_timeout + 10 and track.get("outcome") is None:
+            # احتياط عند تعذر جلب الشموع: نهاية أفق المحاكاة بالسعر الحالي.
             track["outcome"], track["exit_pct"] = "TIMEOUT", pct(price, entry)
             track["outcome_min"] = round(elapsed_min, 1)
             changed = True
@@ -2203,7 +2214,13 @@ def update_tracking(tickers):
             safe_save_track(track)
         notify_outcome(track)
 
-        if elapsed_min >= 1440:
+        if elapsed_min >= horizon_timeout:
+            if track.get("outcome") is None:
+                # أفق التتبع انتهى؛ لا نمدد الصفقة الورقية بعد المدة المعلنة.
+                track["outcome"] = "TIMEOUT"
+                track["exit_pct"] = pct(price, entry)
+                track["outcome_min"] = round(elapsed_min, 1)
+                notify_outcome(track)
             track["status"] = "COMPLETED"
             safe_save_track(track)
             del active_tracks[symbol]
@@ -2597,46 +2614,3 @@ def run_cycle(symbols):
 load_auto_thresholds()
 
 ONCE = "--once" in sys.argv
-
-init_results_file()
-load_state()
-update_shariah_list(force=False)
-maybe_cleanup_logs()
-last_log_cleanup_ts = time.time()
-
-log.info("تحميل قائمة Binance...")
-try:
-    symbols = get_symbols()
-except Exception as e:
-    log.error(f"Cannot load symbols: {e}")
-    sys.exit(1)
-
-log.info(f"تم تحميل {len(symbols)} زوج USDT.")
-log.info("Scanner V7.0 experimental started" + (" (single run)." if ONCE else "."))
-
-if ONCE:
-    try:
-        run_cycle(symbols)
-    except Exception as e:
-        log.exception(f"Scanner error: {e}")
-        save_state()
-        sys.exit(1)
-    save_state()
-    sys.exit(0)
-
-while True:
-    try:
-        sleep_time = run_cycle(symbols)
-        save_state()
-        if time.time() - last_log_cleanup_ts >= LOG_CLEANUP_INTERVAL_HOURS * 3600:
-            update_shariah_list(force=False)
-            last_log_cleanup_ts = time.time()
-        log.info(f"Next scan in {sleep_time:.0f}s...")
-        time.sleep(sleep_time)
-    except KeyboardInterrupt:
-        log.info("Scanner stopped.")
-        save_state()
-        break
-    except Exception as e:
-        log.exception(f"Scanner error: {e}")
-        time.sleep(30)
