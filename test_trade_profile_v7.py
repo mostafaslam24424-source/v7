@@ -1,5 +1,5 @@
 import unittest
-from trade_profile_v7 import classify_opportunity
+from trade_profile_v7 import classify_opportunity, holding_timeout_minutes
 
 
 def candles(closes):
@@ -42,6 +42,12 @@ class OpportunityClassificationTests(unittest.TestCase):
             candles([110, 109, 108, 107, 106, 150]),
         )
         self.assertNotEqual(result["type"], "SWING")
+
+    def test_tracking_windows_match_opportunity_types(self):
+        self.assertEqual(holding_timeout_minutes("SCALP"), 60)
+        self.assertEqual(holding_timeout_minutes("INTRADAY"), 1440)
+        self.assertEqual(holding_timeout_minutes("SWING"), 10080)
+        self.assertEqual(holding_timeout_minutes(None), 1440)
 
 
 if __name__ == "__main__":
