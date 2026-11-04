@@ -27,7 +27,7 @@ import pandas as pd
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from entry_quality_v7 import confirm_one_minute_entry
-from trade_profile_v7 import classify_opportunity, holding_timeout_minutes
+from trade_profile_v7 import classify_opportunity, holding_timeout_minutes, record_target_touches
 
 # ---------- Logging ----------
 logging.basicConfig(
@@ -1946,6 +1946,7 @@ TRACK_COLUMNS = [
     "result_5m", "result_15m", "result_30m",
     "result_1h", "result_4h", "result_24h", "status",
     "lane", "outcome", "exit_pct", "outcome_min",
+    "tp1_hit_min", "tp2_hit_min", "tp3_hit_min",
 ]
 
 # أعمدة نصية لازم تقرا object — لو فاضية بانداس بيحوّلها float64
@@ -2060,6 +2061,9 @@ def save_track(track):
         "outcome": track.get("outcome"),
         "exit_pct": track.get("exit_pct"),
         "outcome_min": track.get("outcome_min"),
+        "tp1_hit_min": track.get("tp1_hit_min"),
+        "tp2_hit_min": track.get("tp2_hit_min"),
+        "tp3_hit_min": track.get("tp3_hit_min"),
     }
     columns = list(row.keys())
     try:
@@ -2127,8 +2131,9 @@ def walk_track_path(symbol, track, now_ms):
             track["lowest_price"] = min(track["lowest_price"], lo)
             minutes_in = (open_t - t0_ms) / 60000.0
             timeout_min = trade_timeout_minutes(track)
+            stop_touched = bool(sl and lo <= sl)
             if track.get("outcome") is None and sl and tp1:
-                if lo <= sl:
+                if stop_touched:
                     track["outcome"], track["exit_pct"] = "SL", pct(sl, entry)
                 elif hi >= tp1:
                     track["outcome"], track["exit_pct"] = "TP1", pct(tp1, entry)
@@ -2136,6 +2141,7 @@ def walk_track_path(symbol, track, now_ms):
                     track["outcome"], track["exit_pct"] = "TIMEOUT", pct(cl, entry)
                 if track.get("outcome") is not None:
                     track["outcome_min"] = round(minutes_in + 1, 1)
+            record_target_touches(track, hi, minutes_in + 1, stop_touched=stop_touched)
             track["last_k_ms"] = open_t + 60000
         if len(rows) < limit:
             return
@@ -2282,6 +2288,9 @@ def start_final_tracking(x):
         "outcome": None,
         "exit_pct": None,
         "outcome_min": None,
+        "tp1_hit_min": None,
+        "tp2_hit_min": None,
+        "tp3_hit_min": None,
         "last_k_ms": None,
         "notified": False,
     }
