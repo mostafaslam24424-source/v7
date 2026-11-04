@@ -96,3 +96,19 @@ def holding_timeout_minutes(opportunity_type: str) -> int:
     if kind == "SWING":
         return 7 * 24 * 60
     return 24 * 60
+
+ 
+def record_target_touches(track: dict, high: float, elapsed_min: float,
+                          stop_touched: bool = False) -> None:
+    """Record first observed TP touches for paper analysis only.
+
+    If a candle also touches the stop, its intrabar order is unknowable from OHLC
+    data, so target touches from that same candle are conservatively not counted.
+    """
+    if stop_touched:
+        return
+    for level in (1, 2, 3):
+        price = _number(track, f"tp{level}")
+        key = f"tp{level}_hit_min"
+        if price > 0 and track.get(key) is None and high >= price:
+            track[key] = round(float(elapsed_min), 1)
