@@ -43,6 +43,18 @@ class OpportunityClassificationTests(unittest.TestCase):
         )
         self.assertNotEqual(result["type"], "SWING")
 
+    def test_completed_only_mode_includes_last_supplied_closed_candle(self):
+        candidate = {"5m": 0.1, "15m": 0.8, "1h": 2.0,
+                     "acceleration": 1.1, "volume_15m": 2.0,
+                     "trend_continuity": 5}
+        result = classify_opportunity(
+            candidate,
+            candles([100, 101, 102, 104]),
+            candles([100, 101, 102, 103]),
+            last_row_is_forming=False,
+        )
+        self.assertEqual(result["type"], "SWING")
+
     def test_tracking_windows_match_opportunity_types(self):
         self.assertEqual(holding_timeout_minutes("SCALP"), 60)
         self.assertEqual(holding_timeout_minutes("INTRADAY"), 1440)

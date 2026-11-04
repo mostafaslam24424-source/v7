@@ -1786,89 +1786,100 @@ def safe_fmt(val, fmt=".2f", default=0):
 
 
 def format_final(x, confirmations, cross_label=None, cross_detail=None):
+    """Build a fully Arabic, educational-only Telegram candidate alert."""
     r = x.get("risk") or {}
     risk_section = ""
     if r:
         notes_txt = ("\n".join(f"  • {n}" for n in r.get("notes", []))
-                     if r.get("notes") else "  • لا تعديلات")
+                     if r.get("notes") else "  • لا توجد تعديلات")
         risk_section = f"""
-━━━ 🎯 خطة التداول (R/R) ━━━
-Entry:      {r['entry']:.10g}
-Stop Loss:  {r['sl']:.10g}  ({-r['sl_pct']:+.2f}%)
-TP1:        {r['tp1']:.10g}  ({r['tp1_pct']:+.2f}%)  R/R={r['tp1_rr']:.2f}
-TP2:        {r['tp2']:.10g}  ({r['tp2_pct']:+.2f}%)  R/R={r['tp2_rr']:.2f}
-TP3:        {r['tp3']:.10g}  ({r['tp3_pct']:+.2f}%)  R/R={r['tp3_rr']:.2f}
-ATR14 used: {r['atr_used']:.2f}%
-تعديلات:
+━━━ 🎯 مستويات المتابعة الافتراضية ━━━
+سعر الرصد:       {r['entry']:.10g}
+مستوى الحماية:   {r['sl']:.10g}  ({-r['sl_pct']:+.2f}%)
+الهدف الأول:     {r['tp1']:.10g}  ({r['tp1_pct']:+.2f}%)  | عائد/مخاطرة={r['tp1_rr']:.2f}
+الهدف الثاني:    {r['tp2']:.10g}  ({r['tp2_pct']:+.2f}%)  | عائد/مخاطرة={r['tp2_rr']:.2f}
+الهدف الثالث:    {r['tp3']:.10g}  ({r['tp3_pct']:+.2f}%)  | عائد/مخاطرة={r['tp3_rr']:.2f}
+استخدام ATR14: {r['atr_used']:.2f}%
+ملاحظات الحساب:
 {notes_txt}
 
-⚠️ مستويات TP/SL هنا للاختبار والمحاكاة التعليمية فقط، وليست تعليمات لتنفيذ صفقة أو مخاطرة بأموال.
+⚠️ المستويات دي افتراضية لأغراض التحليل والمحاكاة التعليمية فقط، وليست أوامر شراء أو بيع.
 """
 
     cross_section = ""
     if cross_label:
         emoji = CROSS_LABEL_EMOJI.get(cross_label, "")
-        cross_section = f"\nCross-exchange: {emoji} {cross_label}\n{cross_detail}\n"
+        cross_section = f"\nتوافق المنصات: {emoji} {cross_label}\n{cross_detail}\n"
 
     wash_warn = ""
     if x.get("is_wash"):
-        wash_warn = f"\n⚠️ تحذير: النمط يشبه Wash Trading — {x.get('wash_reason','')}\n"
+        wash_warn = f"\n⚠️ تحذير: النمط قد يشبه التداول الوهمي — {x.get('wash_reason', '')}\n"
 
     funding_info = ""
     fr = x.get("funding_rate", 0)
     if fr != 0:
-        funding_info = f"\nFunding rate: {fr:+.5f}  ({'Short Squeeze محتمل' if fr < -0.0005 else 'طبيعي'})\n"
+        funding_info = f"\nمعدل التمويل: {fr:+.5f}  ({'ضغط على البائعين محتمل' if fr < -0.0005 else 'ضمن النطاق المعتاد'})\n"
 
-    return f"""{PROGRAM_TAG} 🔥 FINAL EARLY-PUMP CANDIDATE
+    opportunity_names = {
+        "SCALP": "سريعة جدًا (سكالبينج)",
+        "INTRADAY": "خلال اليوم",
+        "SWING": "متعددة الأيام (سوينج)",
+    }
+    lane_names = {
+        "FAST_EXPLOSIVE": "اندفاع سريع",
+        "PERSISTENT": "زخم مستمر",
+        "REVERSAL": "انعكاس صاعد محتمل",
+        "SHORT_SQUEEZE": "ضغط على المراكز البيعية",
+    }
+    kind = str(x.get("opportunity_type", ""))
+    lane = str(x.get("lane", "-"))
+    return f"""{PROGRAM_TAG} 🔎 رصد فرصة صعود محتملة
 
-⚠️ إشارة تجريبية للتحليل والمحاكاة فقط — ليست ضمانًا أو أمر تنفيذ.
+⚠️ تنبيه تجريبي للتحليل والمحاكاة فقط؛ ليس ضمانًا للربح ولا أمرًا بتنفيذ صفقة.
 
-نوع الفرصة: {x.get('opportunity_label', 'غير محدد')}
+نوع الفرصة: {x.get('opportunity_label') or opportunity_names.get(kind, 'غير محدد')}
 المدة التقديرية: {x.get('holding_window', 'غير محددة')}
-الأساس: {x.get('opportunity_basis', 'لا توجد بيانات كافية')}
-الاتجاه: BUY (الماسح الحالي مخصص لاكتشاف فرص الصعود فقط)
+سبب التصنيف: {x.get('opportunity_basis', 'بيانات غير كافية')}
+الاتجاه المرصود: صعود محتمل فقط (الماسح لا يصدر إشارات هبوط/بيع)
 
-COIN: {x['symbol']}
-SETUP: {x['setup']}
-LANE: {x.get('lane', '-')}
-EARLY SCORE: {x['score']}/100
+العملة: {x['symbol']}
+النمط: {x['setup']}
+مسار الرصد: {lane_names.get(lane, lane)}
+درجة الرصد: {x['score']}/100
 
-Price: {x['price']:.10g}
+السعر وقت الرصد: {x['price']:.10g}
 
-5m:  {x['5m']:+.2f}%
-15m: {x['15m']:+.2f}%
-1h:  {x['1h']:+.2f}%
-24h: {x['24h']:+.2f}%
+التغير خلال 5 دقائق:  {x['5m']:+.2f}%
+التغير خلال 15 دقيقة: {x['15m']:+.2f}%
+التغير خلال ساعة:     {x['1h']:+.2f}%
+التغير خلال 24 ساعة:  {x['24h']:+.2f}%
 
-Volume 1h: {x['volume_1h']:.2f}x
-Volume 15m: {x['volume_15m']:.2f}x
-Acceleration: {x['acceleration']:.2f}x
-Volume persistence: {x.get('volume_persistence', 0):.2f}x
+حجم التداول خلال ساعة: {x['volume_1h']:.2f} ضعف المعتاد
+حجم التداول خلال 15 دقيقة: {x['volume_15m']:.2f} ضعف المعتاد
+تسارع الحجم: {x['acceleration']:.2f} ضعف
+استمرار الحجم: {x.get('volume_persistence', 0):.2f} ضعف
 
-Trend: {x.get('trend','N/A')}
-Trend Continuity: {x.get('trend_continuity',0)}/8  (Green streak: {x.get('green_streak',0)})
-EMA9/EMA21: {safe_fmt(x.get('ema9'), '.8g')} / {safe_fmt(x.get('ema21'), '.8g')}
-RSI14: {safe_fmt(x.get('rsi14'), '.1f')}
-ATR14: {safe_fmt(x.get('atr_pct'), '.2f')}%
-Buy pressure: {x.get('buy_pressure',0):.2f}
-Buy pressure Δ: {x.get('buy_pressure_delta',0):+.3f}
-Candle body: {x.get('body_pct',0):+.2f}%
-Upper wick: {x.get('upper_wick_ratio',0)*100:.1f}%
+الاتجاه الفني: {x.get('trend', 'غير متاح')}
+استمرارية الاتجاه: {x.get('trend_continuity', 0)}/8
+مؤشر RSI14: {safe_fmt(x.get('rsi14'), '.1f')}
+التذبذب ATR14: {safe_fmt(x.get('atr_pct'), '.2f')}%
+ضغط الشراء: {x.get('buy_pressure', 0):.2f}
+قوة جسم الشمعة: {x.get('body_pct', 0):+.2f}%
+الفتيل العلوي: {x.get('upper_wick_ratio', 0)*100:.1f}%
 {funding_info}
-Breakout: {x['breakout']:+.2f}%
-Distance from 1h high: {x.get('distance_from_1h_high',0):+.2f}%
-Liquidity: {x['liquidity']}
-24h Volume: ${x['quote_volume']:,.0f}
-Confirmation scans: {confirmations}
+اختراق القمة: {x['breakout']:+.2f}%
+المسافة من قمة الساعة: {x.get('distance_from_1h_high', 0):+.2f}%
+السيولة: {x['liquidity']}
+حجم تداول 24 ساعة: {x['quote_volume']:,.0f} دولار
+عدد مرات التأكيد: {confirmations}
 {cross_section}{wash_warn}{risk_section}
-📌 لماذا ظهرت؟
-حجم غير طبيعي + استمرار حجم + حركة سعر متواصلة + اتجاه/ضغط شراء
-+ فلتر ضد الـexhaustion وضد الـwash trading.
+📌 سبب الرصد:
+ارتفاع غير معتاد في الحجم مع استمرار النشاط وحركة سعرية وضغط شراء،
+مع تطبيق فلاتر للحد من الاختراقات الوهمية والتداول الوهمي.
 
-📊 الأهداف ووقف الخسارة مستويات اختبارية محسوبة آليًا وليست ضمانًا.
-📊 تتبع النتيجة: 5m / 15m / 30m / 1h / 4h / 24h
+📊 الأهداف ومستوى الحماية تقديرات آلية للاختبار فقط.
+📊 تتم متابعة النتيجة وتسجيلها لأغراض التقييم الإحصائي.
 """
-
 
 # ============================================================
 # CSV retention
