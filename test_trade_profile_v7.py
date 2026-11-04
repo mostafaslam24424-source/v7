@@ -1,5 +1,5 @@
 import unittest
-from trade_profile_v7 import classify_opportunity, holding_timeout_minutes
+from trade_profile_v7 import classify_opportunity, holding_timeout_minutes, record_target_touches
 
 
 def candles(closes):
@@ -48,6 +48,25 @@ class OpportunityClassificationTests(unittest.TestCase):
         self.assertEqual(holding_timeout_minutes("INTRADAY"), 1440)
         self.assertEqual(holding_timeout_minutes("SWING"), 10080)
         self.assertEqual(holding_timeout_minutes(None), 1440)
+
+    def test_target_touches_record_first_time_for_all_levels(self):
+        track = {"tp1": 101.0, "tp2": 102.0, "tp3": 103.0,
+                 "tp1_hit_min": None, "tp2_hit_min": None, "tp3_hit_min": None}
+        record_target_touches(track, 102.5, 12.0)
+        self.assertEqual(track["tp1_hit_min"], 12.0)
+        self.assertEqual(track["tp2_hit_min"], 12.0)
+        self.assertIsNone(track["tp3_hit_min"])
+        record_target_touches(track, 104.0, 18.0)
+        self.assertEqual(track["tp1_hit_min"], 12.0)
+        self.assertEqual(track["tp3_hit_min"], 18.0)
+
+    def test_stop_and_target_same_candle_does_not_count_target(self):
+        track = {"tp1": 101.0, "tp2": 102.0, "tp3": 103.0,
+                 "tp1_hit_min": None, "tp2_hit_min": None, "tp3_hit_min": None}
+        record_target_touches(track, 104.0, 7.0, stop_touched=True)
+        self.assertIsNone(track["tp1_hit_min"])
+        self.assertIsNone(track["tp2_hit_min"])
+        self.assertIsNone(track["tp3_hit_min"])
 
 
 if __name__ == "__main__":
