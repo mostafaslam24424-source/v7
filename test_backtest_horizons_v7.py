@@ -15,7 +15,7 @@ class HorizonBacktestTests(unittest.TestCase):
         ]
         r = evaluate_signal(candles, 100, 1, self.targets, "SCALP")
         self.assertEqual([r[f"tp{i}_hit_min"] for i in (1, 2, 3)], [5, 10, 15])
-        self.assertEqual(r["status"], "TIMEOUT")
+        self.assertEqual(r["status"], "DATA_GAP")
 
     def test_same_candle_stop_and_target_is_stop_conservatively(self):
         candles = [{"high": 104, "low": 98, "close": 102}]
