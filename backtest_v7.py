@@ -375,6 +375,39 @@ def process_symbol(sym):
             "liquidity": x["liquidity"], "bars_to_signal": cand["count"],
             **features(i, x),
         }
+        # Profile-specific multi-target paper evaluation. Higher-timeframe samples
+        # end at the signal's last closed 5m candle (k=i-1), never use future bars.
+        from trade_profile_v7 import classify_opportunity
+        k = i - 1
+        closes_4h = [float(c[j]) for j in range(0, k + 1, 48)]
+        closes_1d = [float(c[j]) for j in range(0, k + 1, 288)]
+        rows_4h = [[0, 0, 0, 0, v] for v in closes_4h]
+        rows_1d = [[0, 0, 0, 0, v] for v in closes_1d]
+        profile = classify_opportunity(x, rows_4h, rows_1d)
+        rec["opportunity_type"] = profile["type"]
+        rec["opportunity_basis"] = profile["basis"]
+        rec["tp2_pct"] = round((sl_pct * max(2.0, risk["tp1_rr"] + 0.5)), 4)
+        rec["tp3_pct"] = round((sl_pct * max(4.5, max(2.0, risk["tp1_rr"] + 0.5) + 0.5)), 4)
+        # Keep each latency scenario's original TP1/SL outcome, and add a
+        # separate profile-horizon target-touch study at the primary delay.
+        e_profile = i + prim
+        entry_profile = ol[e_profile]
+        unit_risk = entry_profile * sl_pct / 100.0
+        rr2 = max(2.0, risk["tp1_rr"] + 0.5)
+        rr3 = max(4.5, rr2 + 0.5)
+        target_prices = {
+            1: entry_profile * (1.0 + tp_pct / 100.0),
+            2: entry_profile + unit_risk * rr2,
+            3: entry_profile + unit_risk * rr3,
+        }
+        from backtest_horizons_v7 import evaluate_signal
+        future = [{"high": hl[j], "low": ll[j], "close": cl[j]}
+                  for j in range(e_profile, min(len(ol), e_profile + 10080 // 5))]
+        horizon_result = evaluate_signal(future, entry_profile, sl_pct,
+                                          target_prices, profile["type"])
+        for key, value in horizon_result.items():
+            if key not in ("opportunity_type", "horizon_minutes"):
+                rec[f"profile_{key}"] = value
         for d in delays:
             e = i + d
             outcome, bars, ex = simulate(ol, hl, ll, cl, e, sl_pct, tp_pct, max_bars)
@@ -604,6 +637,22 @@ def report(trades, base, cfg, out_dir, months, n_symbols, events=None):
         bym["n"] = bym["n"].astype(int)
     P(bym.to_string())
     P()
+    if "opportunity_type" in trades.columns:
+        P("--- By opportunity horizon (multi-target; primary entry delay) -----------")
+        for kind, part in trades.groupby("opportunity_type"):
+            P(f"{kind}: n={len(part)} | "
+              f"TP1={(part['profile_tp1_hit_min'].notna().mean()*100):.1f}% | "
+              f"TP2={(part['profile_tp2_hit_min'].notna().mean()*100):.1f}% | "
+              f"TP3={(part['profile_tp3_hit_min'].notna().mean()*100):.1f}% | "
+              f"SL={(part['profile_status'].eq('SL').mean()*100):.1f}% | "
+              f"data-gap={(part['profile_status'].eq('DATA_GAP').mean()*100):.1f}%")
+            for level in (1, 2, 3):
+                times = part[f"profile_tp{level}_hit_min"].dropna()
+                P(f"  TP{level} average time when reached: "
+                  f"{times.mean():.1f} min (n={len(times)})" if len(times)
+                  else f"  TP{level}: not reached in this sample")
+        P("Note: TP touch rates are not trade returns; levels are evaluated independently.")
+        P()
     P("--- By lane -------------------------------------------------------------")
     P(group_summary(trades.assign(lane=trades["lane"].fillna("?")), "lane", d).to_string())
     P()

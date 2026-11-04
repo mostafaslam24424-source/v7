@@ -27,6 +27,7 @@ import pandas as pd
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from entry_quality_v7 import confirm_one_minute_entry
+from trade_profile_v7 import classify_opportunity, holding_timeout_minutes, record_target_touches
 
 # ---------- Logging ----------
 logging.basicConfig(
@@ -159,6 +160,7 @@ RISK_MAX_SL_PCT = 12.0
 RISK_ATR_MULT_SL = 1.5
 RISK_RR_TP1 = 1.5
 RISK_RR_TP2 = 3.0
+RISK_RR_TP3 = 4.5
 RISK_HIGH_ATR_THRESHOLD = 6.0
 RISK_HIGH_ATR_TP1_RR = 1.2
 RISK_HIGH_RSI_THRESHOLD = 76.0
@@ -776,11 +778,13 @@ def compute_risk_levels(entry, atr_val, rsi_val, liquidity):
         notes.append("سيولة منخفضة → TP1 أقرب")
 
     tp2_rr = max(RISK_RR_TP2, tp1_rr + 0.5)
+    tp3_rr = max(RISK_RR_TP3, tp2_rr + 0.5)
 
     sl_price = entry * (1 - sl_pct / 100.0)
     risk_per_unit = entry - sl_price
     tp1_price = entry + risk_per_unit * tp1_rr
     tp2_price = entry + risk_per_unit * tp2_rr
+    tp3_price = entry + risk_per_unit * tp3_rr
 
     return {
         "entry": entry,
@@ -792,6 +796,9 @@ def compute_risk_levels(entry, atr_val, rsi_val, liquidity):
         "tp2": tp2_price,
         "tp2_pct": pct(tp2_price, entry),
         "tp2_rr": tp2_rr,
+        "tp3": tp3_price,
+        "tp3_pct": pct(tp3_price, entry),
+        "tp3_rr": tp3_rr,
         "atr_used": atr_use,
         "notes": notes,
     }
@@ -1790,12 +1797,12 @@ Entry:      {r['entry']:.10g}
 Stop Loss:  {r['sl']:.10g}  ({-r['sl_pct']:+.2f}%)
 TP1:        {r['tp1']:.10g}  ({r['tp1_pct']:+.2f}%)  R/R={r['tp1_rr']:.2f}
 TP2:        {r['tp2']:.10g}  ({r['tp2_pct']:+.2f}%)  R/R={r['tp2_rr']:.2f}
+TP3:        {r['tp3']:.10g}  ({r['tp3_pct']:+.2f}%)  R/R={r['tp3_rr']:.2f}
 ATR14 used: {r['atr_used']:.2f}%
 تعديلات:
 {notes_txt}
 
-⚠️ بعد TP1 → انقل SL إلى Entry (Break-even)
-⚠️ لا تخاطر بأكثر من 1-2% من رأس مالك في الصفقة
+⚠️ مستويات TP/SL هنا للاختبار والمحاكاة التعليمية فقط، وليست تعليمات لتنفيذ صفقة أو مخاطرة بأموال.
 """
 
     cross_section = ""
@@ -1814,7 +1821,12 @@ ATR14 used: {r['atr_used']:.2f}%
 
     return f"""{PROGRAM_TAG} 🔥 FINAL EARLY-PUMP CANDIDATE
 
-⚠️ إشارة تحليلية — ليست ضمانًا ولا أمر شراء.
+⚠️ إشارة تجريبية للتحليل والمحاكاة فقط — ليست ضمانًا أو أمر تنفيذ.
+
+نوع الفرصة: {x.get('opportunity_label', 'غير محدد')}
+المدة التقديرية: {x.get('holding_window', 'غير محددة')}
+الأساس: {x.get('opportunity_basis', 'لا توجد بيانات كافية')}
+الاتجاه: BUY (الماسح الحالي مخصص لاكتشاف فرص الصعود فقط)
 
 COIN: {x['symbol']}
 SETUP: {x['setup']}
@@ -1853,7 +1865,7 @@ Confirmation scans: {confirmations}
 حجم غير طبيعي + استمرار حجم + حركة سعر متواصلة + اتجاه/ضغط شراء
 + فلتر ضد الـexhaustion وضد الـwash trading.
 
-🚫 لا يوجد Target ثابت. سيتم قياس MFE/MAE فعليًا بعد الإشارة.
+📊 الأهداف ووقف الخسارة مستويات اختبارية محسوبة آليًا وليست ضمانًا.
 📊 تتبع النتيجة: 5m / 15m / 30m / 1h / 4h / 24h
 """
 
@@ -1925,7 +1937,8 @@ def maybe_cleanup_logs(force=False):
 
 TRACK_COLUMNS = [
     "final_time_utc", "symbol", "setup", "score",
-    "entry_price", "sl", "sl_pct", "tp1", "tp1_pct", "tp2", "tp2_pct",
+    "entry_price", "sl", "sl_pct", "tp1", "tp1_pct", "tp2", "tp2_pct", "tp3", "tp3_pct",
+    "opportunity_type", "opportunity_label",
     "atr_used", "quote_volume", "liquidity",
     "gain_5m_at_alert", "gain_15m_at_alert",
     "gain_1h_at_alert", "gain_24h_at_alert",
@@ -1933,12 +1946,13 @@ TRACK_COLUMNS = [
     "result_5m", "result_15m", "result_30m",
     "result_1h", "result_4h", "result_24h", "status",
     "lane", "outcome", "exit_pct", "outcome_min",
+    "tp1_hit_min", "tp2_hit_min", "tp3_hit_min",
 ]
 
 # أعمدة نصية لازم تقرا object — لو فاضية بانداس بيحوّلها float64
 # وبيرفض الكتابة النصية فيها (Invalid value 'SL' for dtype 'float64')
 TRACK_STR_COLUMNS = ("final_time_utc", "symbol", "setup", "liquidity",
-                     "status", "lane", "outcome")
+                     "status", "lane", "outcome", "opportunity_type", "opportunity_label")
 
 
 def read_track_file():
@@ -2021,6 +2035,10 @@ def save_track(track):
         "tp1_pct": track.get("tp1_pct"),
         "tp2": track.get("tp2"),
         "tp2_pct": track.get("tp2_pct"),
+        "tp3": track.get("tp3"),
+        "tp3_pct": track.get("tp3_pct"),
+        "opportunity_type": track.get("opportunity_type"),
+        "opportunity_label": track.get("opportunity_label"),
         "atr_used": track.get("atr_used"),
         "quote_volume": track["quote_volume"],
         "liquidity": track["liquidity"],
@@ -2043,6 +2061,9 @@ def save_track(track):
         "outcome": track.get("outcome"),
         "exit_pct": track.get("exit_pct"),
         "outcome_min": track.get("outcome_min"),
+        "tp1_hit_min": track.get("tp1_hit_min"),
+        "tp2_hit_min": track.get("tp2_hit_min"),
+        "tp3_hit_min": track.get("tp3_hit_min"),
     }
     columns = list(row.keys())
     try:
@@ -2079,6 +2100,11 @@ def _first_minute_after(ts_sec):
     return (int(ts_sec // 60) + 1) * 60 * 1000
 
 
+def trade_timeout_minutes(track):
+    """Maximum paper-tracking horizon, aligned with the Telegram opportunity label."""
+    return holding_timeout_minutes(track.get("opportunity_type", "INTRADAY"))
+
+
 def walk_track_path(symbol, track, now_ms):
     """
     يمشي على شموع 1m من لحظة الإشارة ويحدد مين اتحقق الأول: SL ولا TP1 (أو TIMEOUT).
@@ -2104,15 +2130,18 @@ def walk_track_path(symbol, track, now_ms):
             track["peak_price"] = max(track["peak_price"], hi)
             track["lowest_price"] = min(track["lowest_price"], lo)
             minutes_in = (open_t - t0_ms) / 60000.0
+            timeout_min = trade_timeout_minutes(track)
+            stop_touched = bool(sl and lo <= sl)
             if track.get("outcome") is None and sl and tp1:
-                if lo <= sl:
+                if stop_touched:
                     track["outcome"], track["exit_pct"] = "SL", pct(sl, entry)
                 elif hi >= tp1:
                     track["outcome"], track["exit_pct"] = "TP1", pct(tp1, entry)
-                elif minutes_in >= TRADE_TIMEOUT_MIN:
+                elif minutes_in >= timeout_min:
                     track["outcome"], track["exit_pct"] = "TIMEOUT", pct(cl, entry)
                 if track.get("outcome") is not None:
                     track["outcome_min"] = round(minutes_in + 1, 1)
+            record_target_touches(track, hi, minutes_in + 1, stop_touched=stop_touched)
             track["last_k_ms"] = open_t + 60000
         if len(rows) < limit:
             return
@@ -2137,9 +2166,9 @@ def notify_outcome(track):
 def update_tracking(tickers):
     now = time.time()
     now_ms = int(now * 1000)
-    MAX_AGE_MIN = 1500
     for symbol, track in list(active_tracks.items()):
         elapsed_min = (now - track["start_ts"]) / 60
+        horizon_timeout = trade_timeout_minutes(track)
         entry = track["entry_price"]
         changed = False
 
@@ -2153,11 +2182,10 @@ def update_tracking(tickers):
 
         price = tickers.get(symbol, {}).get("price")
         if price is None or price <= 0:
+            # لا نخترع سعر خروج عند غياب بيانات السوق؛ نسجل فجوة بيانات بوضوح.
             notify_outcome(track)
-            if elapsed_min > MAX_AGE_MIN:
-                if track.get("outcome") is None:
-                    track["outcome"], track["exit_pct"] = "TIMEOUT", track.get("mae_pct", 0.0)
-                track["status"] = "COMPLETED"
+            if elapsed_min >= horizon_timeout:
+                track["status"] = "COMPLETED_DATA_GAP"
                 safe_save_track(track)
                 del active_tracks[symbol]
             elif changed:
@@ -2174,8 +2202,8 @@ def update_tracking(tickers):
                 track["results"][target] = pct(price, entry)
                 changed = True
 
-        if elapsed_min >= TRADE_TIMEOUT_MIN + 10 and track.get("outcome") is None:
-            # ماقدرناش نجيب الشموع (خطأ شبكة) -> نقفل بالسعر الحالي
+        if elapsed_min >= horizon_timeout + 10 and track.get("outcome") is None:
+            # احتياط عند تعذر جلب الشموع: نهاية أفق المحاكاة بالسعر الحالي.
             track["outcome"], track["exit_pct"] = "TIMEOUT", pct(price, entry)
             track["outcome_min"] = round(elapsed_min, 1)
             changed = True
@@ -2185,7 +2213,13 @@ def update_tracking(tickers):
             safe_save_track(track)
         notify_outcome(track)
 
-        if elapsed_min >= 1440:
+        if elapsed_min >= horizon_timeout:
+            if track.get("outcome") is None:
+                # أفق التتبع انتهى؛ لا نمدد الصفقة الورقية بعد المدة المعلنة.
+                track["outcome"] = "TIMEOUT"
+                track["exit_pct"] = pct(price, entry)
+                track["outcome_min"] = round(elapsed_min, 1)
+                notify_outcome(track)
             track["status"] = "COMPLETED"
             safe_save_track(track)
             del active_tracks[symbol]
@@ -2232,6 +2266,10 @@ def start_final_tracking(x):
         "tp1_pct": r.get("tp1_pct"),
         "tp2": r.get("tp2"),
         "tp2_pct": r.get("tp2_pct"),
+        "tp3": r.get("tp3"),
+        "tp3_pct": r.get("tp3_pct"),
+        "opportunity_type": x.get("opportunity_type"),
+        "opportunity_label": x.get("opportunity_label"),
         "atr_used": r.get("atr_used"),
         "quote_volume": x["quote_volume"],
         "liquidity": x["liquidity"],
@@ -2250,6 +2288,9 @@ def start_final_tracking(x):
         "outcome": None,
         "exit_pct": None,
         "outcome_min": None,
+        "tp1_hit_min": None,
+        "tp2_hit_min": None,
+        "tp3_hit_min": None,
         "last_k_ms": None,
         "notified": False,
     }
@@ -2323,6 +2364,25 @@ def maybe_final_signal(x, now):
         final_x["price"] = live
         final_x["risk"] = compute_risk_levels(live, final_x.get("atr_pct"),
                                               final_x.get("rsi14"), final_x["liquidity"])
+
+    # Classify the expected holding horizon using completed higher-timeframe candles.
+    # Missing HTF data never upgrades a candidate to Swing.
+    try:
+        htf_4h = get_json("/api/v3/klines", {"symbol": sym, "interval": "4h", "limit": 6}, retries=2)
+    except Exception as exc:
+        htf_4h = None
+        log.warning(f"[OpportunityType] {sym}: 4h data unavailable: {exc}")
+    try:
+        htf_1d = get_json("/api/v3/klines", {"symbol": sym, "interval": "1d", "limit": 6}, retries=2)
+    except Exception as exc:
+        htf_1d = None
+        log.warning(f"[OpportunityType] {sym}: 1d data unavailable: {exc}")
+    horizon = classify_opportunity(final_x, htf_4h, htf_1d)
+    final_x["opportunity_type"] = horizon["type"]
+    final_x["opportunity_label"] = horizon["label"]
+    final_x["holding_window"] = horizon["holding_window"]
+    final_x["opportunity_basis"] = horizon["basis"]
+    log.info(f"[OpportunityType] {sym}: {horizon['label']} | {horizon['basis']}")
 
     cross_label, cross_detail = cross_exchange_confirmation(sym)
 
@@ -2556,46 +2616,3 @@ def run_cycle(symbols):
 load_auto_thresholds()
 
 ONCE = "--once" in sys.argv
-
-init_results_file()
-load_state()
-update_shariah_list(force=False)
-maybe_cleanup_logs()
-last_log_cleanup_ts = time.time()
-
-log.info("تحميل قائمة Binance...")
-try:
-    symbols = get_symbols()
-except Exception as e:
-    log.error(f"Cannot load symbols: {e}")
-    sys.exit(1)
-
-log.info(f"تم تحميل {len(symbols)} زوج USDT.")
-log.info("Scanner V7.0 experimental started" + (" (single run)." if ONCE else "."))
-
-if ONCE:
-    try:
-        run_cycle(symbols)
-    except Exception as e:
-        log.exception(f"Scanner error: {e}")
-        save_state()
-        sys.exit(1)
-    save_state()
-    sys.exit(0)
-
-while True:
-    try:
-        sleep_time = run_cycle(symbols)
-        save_state()
-        if time.time() - last_log_cleanup_ts >= LOG_CLEANUP_INTERVAL_HOURS * 3600:
-            update_shariah_list(force=False)
-            last_log_cleanup_ts = time.time()
-        log.info(f"Next scan in {sleep_time:.0f}s...")
-        time.sleep(sleep_time)
-    except KeyboardInterrupt:
-        log.info("Scanner stopped.")
-        save_state()
-        break
-    except Exception as e:
-        log.exception(f"Scanner error: {e}")
-        time.sleep(30)
