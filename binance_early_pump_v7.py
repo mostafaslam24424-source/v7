@@ -27,7 +27,7 @@ import pandas as pd
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from entry_quality_v7 import confirm_one_minute_entry
-from trade_profile_v7 import classify_opportunity
+from trade_profile_v7 import classify_opportunity, holding_timeout_minutes
 
 # ---------- Logging ----------
 logging.basicConfig(
@@ -2099,12 +2099,7 @@ def _first_minute_after(ts_sec):
 
 def trade_timeout_minutes(track):
     """Maximum paper-tracking horizon, aligned with the Telegram opportunity label."""
-    kind = str(track.get("opportunity_type", "INTRADAY")).upper()
-    if kind == "SCALP":
-        return 60
-    if kind == "SWING":
-        return 7 * 24 * 60
-    return 24 * 60
+    return holding_timeout_minutes(track.get("opportunity_type", "INTRADAY"))
 
 
 def walk_track_path(symbol, track, now_ms):
