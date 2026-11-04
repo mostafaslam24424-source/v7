@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "binance_early_pump_v7.py"
+      - "backtest_v7.py"
       - "trade_profile_v7.py"
       - "test_trade_profile_v7.py"
       - "backtest_horizons_v7.py"
@@ -29,6 +30,6 @@ jobs:
       - name: Install runtime dependencies
         run: python -m pip install --upgrade pip requests pandas
       - name: Compile scanner and backtest modules
-        run: python -m py_compile binance_early_pump_v7.py trade_profile_v7.py backtest_horizons_v7.py
+        run: python -m py_compile binance_early_pump_v7.py backtest_v7.py trade_profile_v7.py backtest_horizons_v7.py
       - name: Run paper-analysis unit tests
         run: python -m unittest -v test_trade_profile_v7.py test_backtest_horizons_v7.py
