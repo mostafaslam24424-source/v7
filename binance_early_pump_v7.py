@@ -2627,3 +2627,33 @@ def run_cycle(symbols):
 load_auto_thresholds()
 
 ONCE = "--once" in sys.argv
+
+
+def main():
+    """Run one scan for GitHub Actions, or keep scanning when invoked normally."""
+    load_state()
+    symbols = get_symbols()
+    if not symbols:
+        raise RuntimeError("قائمة العملات فارغة؛ تم إيقاف المسح بدل إنهاء التشغيل بصمت.")
+
+    log.info("V7 scanner started | symbols=%d | once=%s", len(symbols), ONCE)
+
+    while True:
+        try:
+            delay = run_cycle(symbols)
+        except Exception:
+            log.exception("V7 scan cycle failed")
+            save_state()
+            raise
+
+        save_state()
+        log.info("V7 scan cycle finished | state saved")
+
+        if ONCE:
+            break
+
+        time.sleep(max(10, delay))
+
+
+if __name__ == "__main__":
+    main()
