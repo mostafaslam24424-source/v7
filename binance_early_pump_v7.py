@@ -1496,6 +1496,34 @@ def final_candidate_eligible(x):
     return final_lane(x) is not None
 
 
+def log_final_gate_diagnostic(x, reason, **extra):
+    """Structured, read-only explanation for why a watch candidate did not become FINAL."""
+    sym = x.get("symbol", "UNKNOWN")
+    gates = {
+        "strict": strict_pump_gate(x),
+        "explosive": explosive_early_gate(x),
+        "persistent": persistent_explosion_gate(x),
+        "reversal": reversal_explosion_gate(x),
+        "squeeze": squeeze_gate(x),
+    }
+    metrics = {
+        "score": x.get("score"),
+        "5m": x.get("5m"), "15m": x.get("15m"), "1h": x.get("1h"),
+        "24h": x.get("24h"), "volume_15m": x.get("volume_15m"),
+        "volume_1h": x.get("volume_1h"), "acceleration": x.get("acceleration"),
+        "buy_pressure": x.get("buy_pressure"), "trend_continuity": x.get("trend_continuity"),
+        "green_streak": x.get("green_streak"), "rsi14": x.get("rsi14"),
+        "breakout": x.get("breakout"), "upper_wick_ratio": x.get("upper_wick_ratio"),
+        "quote_volume": x.get("quote_volume"), "is_wash": bool(x.get("is_wash")),
+        "price_confirmation": bool(x.get("price_confirmation")),
+        "continuation_quality": bool(x.get("continuation_quality")),
+        "funding_rate": x.get("funding_rate"),
+    }
+    metrics.update(extra)
+    log.info("[FINAL_DIAG] symbol=%s reason=%s lane=%s gates=%s metrics=%s",
+             sym, reason, final_lane(x), gates, metrics)
+
+
 # ============================================================
 # Cross-exchange
 # ============================================================
@@ -2346,19 +2374,23 @@ def maybe_final_signal(x, now):
 
     fake_reason = fake_breakout_rejection(x)
     if fake_reason:
-        log.info(f"[V7 FakeBreakout] {sym}: FINAL blocked ({fake_reason})")
+        log_final_gate_diagnostic(x, "FAKE_BREAKOUT_REJECTED", fake_reason=fake_reason)
         return False
 
     # Never overwrite an existing tracked trade: keep its MFE/MAE and outcome history intact.
     if sym in active_tracks:
-        log.info(f"[V7 Tracking] {sym}: new alert suppressed; existing track is still retained")
+        log_final_gate_diagnostic(x, "EXISTING_ACTIVE_TRACK")
         return False
 
     if sym in final_cooldown:
         if now - final_cooldown[sym] < FINAL_COOLDOWN_HOURS * 3600:
+            log_final_gate_diagnostic(x, "FINAL_COOLDOWN_ACTIVE",
+                                       remaining_seconds=round(FINAL_COOLDOWN_HOURS * 3600 - (now - final_cooldown[sym]), 1))
             return False
 
     if x["score"] < MIN_CANDIDATE_SCORE:
+        log_final_gate_diagnostic(x, "SCORE_BELOW_MIN_CANDIDATE",
+                                   min_candidate_score=MIN_CANDIDATE_SCORE)
         return False
 
     c = candidates.get(sym)
@@ -2370,6 +2402,8 @@ def maybe_final_signal(x, now):
             "best": x,
             "first": x,
         }
+        log_final_gate_diagnostic(x, "WAITING_FOR_CONFIRMATIONS",
+                                   confirmation_count=1, confirmations_required=CONFIRMATIONS_REQUIRED)
         return False
 
     c["count"] += 1
@@ -2379,9 +2413,13 @@ def maybe_final_signal(x, now):
 
     fast_lane = fast_explosive_eligible(x)
     if c["count"] < CONFIRMATIONS_REQUIRED and not fast_lane:
+        log_final_gate_diagnostic(x, "CONFIRMATIONS_NOT_MET",
+                                   confirmation_count=c["count"], confirmations_required=CONFIRMATIONS_REQUIRED,
+                                   fast_lane=fast_lane)
         return False
 
     if not final_candidate_eligible(x) and not fast_lane:
+        log_final_gate_diagnostic(x, "FINAL_LANE_GATE_FAILED", fast_lane=fast_lane)
         return False
 
     first = c["first"]
@@ -2393,6 +2431,14 @@ def maybe_final_signal(x, now):
     )
 
     if not second_confirmed and not fast_lane:
+        log_final_gate_diagnostic(
+            x, "SECOND_CONFIRMATION_FAILED", fast_lane=fast_lane,
+            second_confirmation={
+                "continuation_quality": bool(x.get("continuation_quality")),
+                "5m_above_minus_0_3": x.get("5m", -999) > -0.3,
+                "15m_vs_first_ok": x.get("15m", -999) >= first.get("15m", 0) - 1.0,
+                "volume_1h_vs_first_ok": x.get("volume_1h", 0) >= first.get("volume_1h", 0) * 0.70,
+            })
         return False
 
     # نستخدم مسح الآن (مش best القديم) + سعر لحظي، عشان الدخول/SL/TP يطابقوا اللي يقدر المستخدم ينفذه
@@ -2427,7 +2473,7 @@ def maybe_final_signal(x, now):
     cross_label, cross_detail = cross_exchange_confirmation(sym)
 
     if SUPPRESS_ON_DIVERGENCE and cross_label == "DIVERGENCE":
-        log.info(f"[Cross] {sym}: DIVERGENCE — تم منع FINAL. {cross_detail}")
+        log_final_gate_diagnostic(x, "CROSS_EXCHANGE_DIVERGENCE", cross_detail=cross_detail)
         final_cooldown[sym] = now
         candidates.pop(sym, None)
         return False
@@ -2444,7 +2490,8 @@ def maybe_final_signal(x, now):
         entry_ok, entry_reason, entry_metrics = False, "1M_CONFIRMATION_FETCH_ERROR", {}
         log.warning(f"[EntryQuality] {sym}: 1m confirmation fetch failed: {exc}")
     if not entry_ok:
-        log.info(f"[EntryQuality] {sym}: FINAL blocked ({entry_reason}) metrics={entry_metrics}")
+        log_final_gate_diagnostic(x, "ENTRY_1M_CONFIRMATION_FAILED",
+                                   entry_reason=entry_reason, entry_metrics=entry_metrics)
         return False
 
     log.info(f"[EntryQuality] {sym}: 1m confirmation passed metrics={entry_metrics}")
@@ -2634,6 +2681,10 @@ def run_cycle(symbols):
             log_early_watch(x, now)
             if final_candidate_eligible(x):
                 maybe_final_signal(x, now)
+            else:
+                fake_reason = fake_breakout_rejection(x)
+                log_final_gate_diagnostic(x, "FAKE_BREAKOUT_REJECTED" if fake_reason else "NO_FINAL_LANE",
+                                           fake_reason=fake_reason)
             if compressed_gate(x):
                 maybe_compressed_alert(x, now)
 
