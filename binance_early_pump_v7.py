@@ -573,30 +573,59 @@ def update_shariah_list(force=False):
 
 def get_symbols():
     data = get_json("/api/v3/exchangeInfo")
+    exchange_symbols = data.get("symbols", []) if isinstance(data, dict) else []
     out = []
     shariah_exclusions = []
     now_iso = datetime.now(timezone.utc).isoformat()
-    for s in data["symbols"]:
+
+    # Keep per-stage counts so a small scan universe can be explained from Actions logs.
+    counts = {
+        "exchangeInfo_total": len(exchange_symbols),
+        "not_trading": 0,
+        "not_usdt_quote": 0,
+        "spot_not_allowed": 0,
+        "leveraged_tokens": 0,
+        "stable_or_mega_cap": 0,
+        "shariah_excluded": 0,
+    }
+
+    for s in exchange_symbols:
         if s.get("status") != "TRADING":
+            counts["not_trading"] += 1
             continue
         if s.get("quoteAsset") != "USDT":
+            counts["not_usdt_quote"] += 1
             continue
         if s.get("isSpotTradingAllowed") is False:
+            counts["spot_not_allowed"] += 1
             continue
-        sym = s["symbol"]
+        sym = s.get("symbol", "")
         if any(x in sym for x in ("UPUSDT", "DOWNUSDT", "BULLUSDT", "BEARUSDT")):
+            counts["leveraged_tokens"] += 1
             continue
-        base = sym[:-4]
+        base = sym[:-4] if sym.endswith("USDT") else sym
         if base in STABLECOIN_BASES or base in MEGA_CAP_BASES:
+            counts["stable_or_mega_cap"] += 1
             continue
         if SHARIAH_FILTER_ENABLED and base not in SHARIAH_COMPLIANT_BASES:
+            counts["shariah_excluded"] += 1
             shariah_exclusions.append({
                 "logged_time_utc": now_iso, "symbol": sym,
                 "stage": "SHARIAH_FILTER", "reason": "NOT_IN_COMPLIANT_LIST",
             })
             continue
         out.append(sym)
+
     append_scan_diagnostics(shariah_exclusions)
+    log.info(
+        "Universe breakdown | exchangeInfo=%d | not_trading=%d | not_usdt_quote=%d "
+        "| spot_not_allowed=%d | leveraged=%d | stable_or_mega=%d "
+        "| shariah_excluded=%d | final=%d | shariah_filter=%s",
+        counts["exchangeInfo_total"], counts["not_trading"],
+        counts["not_usdt_quote"], counts["spot_not_allowed"],
+        counts["leveraged_tokens"], counts["stable_or_mega_cap"],
+        counts["shariah_excluded"], len(out), SHARIAH_FILTER_ENABLED,
+    )
     return out
 
 
